@@ -1,5 +1,5 @@
 streamlit
+opencv-python-headless
+numpy
 firebase-admin
 pillow
-requests
-numpy==1.26.4
