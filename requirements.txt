@@ -3,3 +3,5 @@ firebase-admin
 pillow
 requests
 numpy==1.26.4
+mediapipe
+opencv-python-headless
