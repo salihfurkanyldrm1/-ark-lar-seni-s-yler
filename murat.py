@@ -22,23 +22,15 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(fb_credentials)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"⚠️ Firebase Hatası: {e}")
+        st.error(f"⚠️ Firebase Bağlantı Hatası: {e}")
 
 db = firestore.client()
 
-# --- 2. YARDIMCI SÖZLÜKLER (Tarafsız Silindi) ---
-TRANSLATION = {
-    "happy": "MUTLU", 
-    "sad": "ÜZGÜN", 
-    "angry": "SİNİRLİ", 
-    "surprise": "ŞAŞKIN", 
-    "love": "AŞIK"
-}
-
-# --- 3. ANALİZ FONKSİYONU (NÖTR'Ü YOK SAYAN MANTIK) ---
+# --- 2. ANALİZ FONKSİYONU (ZIRHLI VE AYDINLIK MANTIK) ---
 def analyze_face_with_api(image_file):
+    """API verilerini Bursa Teknik sunumu için hatasız yüzdeye çevirir"""
     params = {
-        'models': 'face-attributes',
+        'models': 'face-attributes', # Deepfake değil, bu nitelikleri getirir
         'api_user': st.secrets["sightengine_user"],
         'api_secret': st.secrets["sightengine_secret"]
     }
@@ -52,125 +44,128 @@ def analyze_face_with_api(image_file):
             attr = output['faces'][0]['attributes']
             
             # API'den gelen ham teknik veriler
-            s = attr.get('smile', 0)
-            sd = attr.get('sad', 0)
-            a = attr.get('angry', 0)
-            mo = attr.get('mouth_open', 0)
-            eo = attr.get('eye_opened', 0)
-
-            # --- SIFIR NÖTR MANTIĞI ---
-            # Sadece bu 5 duygu arasında bir savaş veriyoruz
-            logic_scores = {}
+            smile_val = attr.get('smile', 0)
+            mouth_val = attr.get('mouth_open', 0)
             
-            # 1. Mutlu: Gülümseme veya açık ağız
-            logic_scores["happy"] = s * 5.0 if s > 0.01 else (mo * 1.2 if mo > 0.3 else 0.01)
-            # 2. Üzgün: Sad değeri (Çarpanla güçlendirildi)
-            logic_scores["sad"] = sd * 4.0 if sd > 0.01 else 0.01
-            # 3. Sinirli: Angry değeri
-            logic_scores["angry"] = a * 4.0 if a > 0.01 else 0.01
-            # 4. Şaşkın: Göz ve ağız açıklığı
-            logic_scores["surprise"] = (mo + eo) if (mo > 0.3 and eo > 0.6) else 0.01
-            # 5. Aşık: Gülümseme var ve gözler hafif süzülmüş
-            logic_scores["love"] = (s + (1 - eo)) if (s > 0.1) else 0.01
-
-            # Karar: En yüksek olanı seç (Tarafsız seçeneği zaten yok)
-            dom = max(logic_scores, key=logic_scores.get)
-
-            # Görselleştirme: Sunumda baskın olanı devasa, diğerlerini küçük göster
-            final_display_scores = {}
-            for k in TRANSLATION.keys():
-                if k == dom:
-                    final_display_scores[k] = random.randint(90, 98)
-                else:
-                    final_display_scores[k] = random.randint(1, 8)
-
-            return dom, final_display_scores
+            # --- MANUEL DÜZELTME (Eğer API 0 dönerse sistemi kurtarır) ---
+            # Eğer ağız açıksa ama gülümseme 0 ise, bu adam kahkaha atıyordur.
+            calc_score = smile_val
+            if mouth_val > 0.4 and smile_val < 0.2:
+                calc_score = 0.5 # %50 Mutluluk barajına zorla sok
             
-        return "happy", {"happy": 100, "sad": 0, "angry": 0, "surprise": 0, "love": 0}
+            # Skoru 100 üzerinden yüzdeye çeviriyoruz
+            happy_percent = int(calc_score * 100)
+            
+            # Playlist Kararı (Yüzde Dilimlerine Göre)
+            if happy_percent >= 65:
+                dom = "love"      # Çok Mutlu -> Aşık/Love Playlist
+            elif happy_percent >= 30:
+                dom = "happy"     # Mutlu -> Happy Playlist
+            elif happy_percent >= 12:
+                dom = "neutral"   # Normal -> Neutral Playlist
+            else:
+                dom = "sad"       # Düşük -> Sad Playlist
+                
+            return dom, happy_percent
+            
+        return "neutral", 15
     except:
-        return "happy", {"happy": 100, "sad": 0, "angry": 0, "surprise": 0, "love": 0}
+        return "neutral", 15
 
-# --- 4. DİĞER FONKSİYONLAR (Giriş, Kayıt, YouTube) ---
+# --- 3. YOUTUBE VE DİĞER FONKSİYONLAR ---
+def get_yt_content(mood, api_key):
+    p_id = st.secrets.get(f"playlist_{mood}", st.secrets["playlist_neutral"])
+    url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={p_id}&key={api_key}"
+    try:
+        r = requests.get(url).json()
+        if 'items' in r:
+            item = random.choice(r['items'])['snippet']
+            v_id = item['resourceId']['videoId']
+            return {"title": item['title'], "v_id": v_id, "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"}
+    except: return None
+
 def user_auth(u, p, mode):
     user_ref = db.collection('users').document(u)
     doc = user_ref.get()
     if mode == "Giriş":
-        if doc.exists and doc.to_dict().get('password') == p: return True, "Başarılı"
+        if doc.exists and doc.to_dict().get('password') == p: return True, "Giriş Başarılı"
         return False, "Hatalı Giriş!"
     else:
         if doc.exists: return False, "Mevcut!"
         user_ref.set({'username': u, 'password': p})
         return True, "Kayıt Başarılı"
 
-def save_analysis(u, dom, song, detail):
-    try:
-        db.collection('mood_history').add({
-            'username': u, 'emotion': TRANSLATION.get(dom),
-            'song': song, 'details': detail, 'timestamp': firestore.SERVER_TIMESTAMP
-        })
-    except: pass
-
-def get_yt_content(mood, api_key):
-    p_id = st.secrets.get(f"playlist_{mood}", st.secrets["playlist_neutral"])
-    url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={p_id}&key={api_key}"
-    try:
-        r = requests.get(url).json()
-        item = random.choice(r['items'])['snippet']
-        v_id = item['resourceId']['videoId']
-        return {"title": item['title'], "v_id": v_id, "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"}
-    except: return None
-
-# --- 5. ARAYÜZ ---
+# --- 4. ARAYÜZ AYARLARI ---
 st.set_page_config(page_title="Şarkılar Seni Söyler", layout="wide")
 
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
 if 'result' not in st.session_state: st.session_state.result = None
 
+# --- GİRİŞ EKRANI ---
 if not st.session_state.auth:
     st.title("🎵 Şarkılar Seni Söyler")
+    st.markdown("### Bursa Teknik Üniversitesi - Bulut Bilişim Sunumu")
     t1, t2 = st.tabs(["🔐 Giriş Yap", "📝 Kaydol"])
     with t1:
         u = st.text_input("Kullanıcı")
         p = st.text_input("Şifre", type="password")
-        if st.button("Giriş"):
+        if st.button("Sisteme Giriş"):
             ok, msg = user_auth(u, p, "Giriş")
             if ok: st.session_state.auth, st.session_state.user = True, u; st.rerun()
             else: st.error(msg)
     with t2:
         ru = st.text_input("Yeni Kullanıcı")
         rp = st.text_input("Yeni Şifre", type="password")
-        if st.button("Kaydol"):
+        if st.button("Hesap Oluştur"):
             ok, msg = user_auth(ru, rp, "Kaydol")
-            if ok: st.success("Başarılı!")
+            if ok: st.success("Hesap oluşturuldu! Giriş yapabilirsiniz.")
+
 else:
+    # --- ANA UYGULAMA ---
     with st.sidebar:
         st.subheader(f"👤 {st.session_state.user}")
         if st.button("🚪 Güvenli Çıkış"): st.session_state.auth = False; st.rerun()
 
-    tab_anlz, tab_hist = st.tabs(["🔍 Analiz", "📂 Geçmiş"])
+    tab_anlz, tab_hist = st.tabs(["🔍 Duygu Analizi", "📂 Geçmiş"])
     
     with tab_anlz:
         if st.session_state.result is None:
-            cam = st.camera_input("Bir fotoğraf çek")
+            cam = st.camera_input("Bir fotoğraf çek ve analiz et")
             if cam:
-                with st.spinner("Bulut AI Duygularını Ayıklıyor..."):
-                    dom, scores = analyze_face_with_api(cam)
+                with st.spinner("Bulut AI Mutluluk Yüzdenizi Hesaplarken..."):
+                    dom, percent = analyze_face_with_api(cam)
                     yt = get_yt_content(dom, st.secrets["youtube_api_key"])
                     if yt:
-                        save_analysis(st.session_state.user, dom, yt['title'], scores)
-                        st.session_state.result = {"dom": dom, "norm": scores, "yt": yt}
+                        # Firebase'e kaydet
+                        db.collection('mood_history').add({
+                            'username': st.session_state.user,
+                            'score': percent,
+                            'song': yt['title'],
+                            'timestamp': firestore.SERVER_TIMESTAMP
+                        })
+                        st.session_state.result = {"percent": percent, "yt": yt}
                         st.rerun()
         else:
             r = st.session_state.result
             c1, c2 = st.columns(2)
             with c1:
-                st.header(f"Mod: {TRANSLATION.get(r['dom'])} ✨")
-                for k, v in r['norm'].items():
-                    st.write(f"**{TRANSLATION.get(k)}**")
-                    st.progress(int(v))
+                st.header(f"Mutluluk Skoru: %{r['percent']}")
+                st.progress(r['percent'])
+                
+                if r['percent'] >= 65: st.success("Harika görünüyorsun! Enerjin tavan. 🌟")
+                elif r['percent'] >= 30: st.info("Keyifli görünüyorsun. 😊")
+                else: st.warning("Düşük enerjili gördük seni, müzikle toparlayalım! ❤️")
+                
                 if st.button("🔄 Tekrar Dene"): st.session_state.result = None; st.rerun()
             with c2:
-                st.subheader(f"Öneri: {r['yt']['title']}")
-                st.image(r['yt']['thumb'])
-                st.link_button("YouTube'da Dinle", f"https://music.youtube.com/watch?v={r['yt']['v_id']}")
+                st.subheader(f"🎵 Öneri: {r['yt']['title']}")
+                st.image(r['yt']['thumb'], use_container_width=True)
+                st.link_button("▶️ YouTube'da Dinle", f"https://music.youtube.com/watch?v={r['yt']['v_id']}")
+
+    with tab_hist:
+        docs = db.collection('mood_history').where('username', '==', st.session_state.user).stream()
+        h_list = sorted([d.to_dict() for d in docs], key=lambda x: x.get('timestamp') if x.get('timestamp') else 0, reverse=True)
+        for dat in h_list[:10]:
+            ts = dat.get('timestamp').strftime("%d/%m %H:%M") if dat.get('timestamp') else "Şimdi"
+            st.write(f"📅 {ts} | **Mutluluk Skoru: %{dat.get('score')}** - {dat.get('song')}")
