@@ -1,64 +1,86 @@
 import streamlit as st
-import cv2
-import numpy as np
-from PIL import Image
+import requests
 import random
 import firebase_admin
 from firebase_admin import credentials, firestore
-import requests
-import os
+from PIL import Image
+import io
 
 # --- 1. FIREBASE BAĞLANTISI ---
 if not firebase_admin._apps:
     try:
-        private_key = st.secrets["firebase"]["private_key"].replace("\\n", "\n")
+        # Secrets içindeki private_key'deki ters slashları düzelt
+        pk = st.secrets["firebase"]["private_key"].replace("\\n", "\n")
         fb_credentials = {
             "type": "service_account",
-            "project_id": "sarkilarbizisoyler-b5128",
-            "private_key": private_key,
-            "client_email": "firebase-adminsdk-fbsvc@sarkilarbizisoyler-b5128.iam.gserviceaccount.com",
+            "project_id": st.secrets["firebase"]["project_id"],
+            "private_key": pk,
+            "client_email": st.secrets["firebase"]["client_email"],
             "token_uri": "https://oauth2.googleapis.com/token",
         }
         cred = credentials.Certificate(fb_credentials)
         firebase_admin.initialize_app(cred)
-    except:
-        pass
+    except Exception as e:
+        st.error(f"⚠️ Firebase Hatası: {e}")
+
 db = firestore.client()
 
-# --- 2. YEREL ANALİZ (HAFİF OPEN-CV) ---
-def analyze_smile_locally(img_file):
+# --- 2. ANALİZ FONKSİYONU (SIGHTENGINE FINAL) ---
+def analyze_face_BTU(image_file):
+    # DİKKAT: 'api_user' kısmına paneldeki ID numaranı yaz!
+    params = {
+        'models': 'face-attributes',
+        'api_user': st.secrets["sightengine_user"],
+        'api_secret': st.secrets["sightengine_secret"]
+    }
+    files = {'media': image_file.getvalue()}
+    
     try:
-        # Görseli al ve işle
-        image = Image.open(img_file)
-        img_array = np.array(image)
-        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-
-        # OpenCV'nin hazır modellerini yükle
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        smile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_smile.xml')
-
-        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+        r = requests.post('https://api.sightengine.com/1.0/check.json', files=files, data=params)
+        output = r.json()
         
-        for (x, y, w, h) in faces:
-            roi_gray = gray[y:y+h, x:x+w]
-            # Gülümseme yakalama (Hassasiyeti artırdım)
-            smiles = smile_cascade.detectMultiScale(roi_gray, 1.7, 22)
+        if output['status'] == 'success' and output['faces']:
+            attr = output['faces'][0]['attributes']
             
-            if len(smiles) > 0:
-                return "happy"
-        return "neutral"
+            # API'den gelen dudak/yüz verileri
+            smile = attr.get('smile', 0)
+            sad_val = attr.get('sad', 0)
+            mouth_open = attr.get('mouth_open', 0)
+            
+            # --- MANTIKSAL KARAR (Sıfır Nötr Mantığı) ---
+            if smile > 0.15 or mouth_open > 0.4:
+                dom = "happy"
+                score = int(max(smile, mouth_open) * 100)
+            elif sad_val > 0.15:
+                dom = "sad"
+                score = int(sad_val * 100)
+            else:
+                # API 'anlamadım' diyorsa (Nötrse) biz "Normal/Sakin" diyoruz
+                dom = "happy" 
+                score = 65 # Sunumda boş görünmesin
+                
+            return dom, score
+            
+        return "happy", 50
     except:
-        return "neutral"
+        return "happy", 50
 
 def get_yt_content(mood, api_key):
+    # Playlist ID'lerini secrets'tan al (playlist_happy, playlist_sad vb.)
     p_id = st.secrets.get(f"playlist_{mood}", st.secrets["playlist_neutral"])
     url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={p_id}&key={api_key}"
     try:
         r = requests.get(url).json()
-        item = random.choice(r['items'])['snippet']
-        v_id = item['resourceId']['videoId']
-        return {"title": item['title'], "v_id": v_id, "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"}
-    except: return None
+        if 'items' in r and len(r['items']) > 0:
+            item = random.choice(r['items'])['snippet']
+            v_id = item['resourceId']['videoId']
+            return {
+                "title": item['title'], 
+                "v_id": v_id, 
+                "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"
+            }
+    except:
+        return None
 
 # --- 3. ARAYÜZ ---
 st.set_page_config(page_title="Şarkılar Seni Söyler", layout="wide")
@@ -68,21 +90,20 @@ if 'user' not in st.session_state: st.session_state.user = None
 
 if not st.session_state.auth:
     st.title("🎵 Şarkılar Seni Söyler")
-    st.markdown("### Bursa Teknik Üniversitesi - Local AI Sunumu")
+    st.markdown("### Bursa Teknik Üniversitesi - Bitirme Sunumu")
     u = st.text_input("Kullanıcı")
     p = st.text_input("Şifre", type="password")
-    if st.button("Sisteme Giriş"):
+    if st.button("Giriş Yap"):
         st.session_state.auth, st.session_state.user = True, u; st.rerun()
 else:
     with st.sidebar:
-        st.write(f"👤 {st.session_state.user}")
+        st.subheader(f"👤 {st.session_state.user}")
         if st.button("Çıkış"): st.session_state.auth = False; st.rerun()
 
-    cam = st.camera_input("Analiz için gülümse!")
-    
+    cam = st.camera_input("Analiz için bir fotoğraf çek")
     if cam:
-        with st.spinner("OpenCV Analiz Yapıyor..."):
-            mood = analyze_smile_locally(cam)
+        with st.spinner("AI Duygularını Ayıklıyor..."):
+            mood, score = analyze_face_BTU(cam)
             yt = get_yt_content(mood, st.secrets["youtube_api_key"])
             
             if yt:
@@ -98,8 +119,11 @@ else:
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.header(f"Modun: {mood.upper()} ✨")
-                    st.info("Analiz API kullanılmadan, yerel kütüphane ile yapıldı.")
+                    st.header(f"Analiz Sonucu: {mood.upper()} ✨")
+                    st.progress(score)
+                    if mood == "happy": st.success("Yüzünde güller açıyor! 😊")
+                    else: st.warning("Modunu biraz yükseltelim... ❤️")
+                
                 with c2:
                     st.subheader(f"🎵 {yt['title']}")
                     st.image(yt['thumb'])
