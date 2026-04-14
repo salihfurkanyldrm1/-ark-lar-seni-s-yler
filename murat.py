@@ -73,7 +73,7 @@ def get_yt_content(playlist_id, api_key):
     except: return None
 
 # --- 4. SAYFA AYARLARI ---
-st.set_page_config(page_title="Mood-Fi Pro", page_icon="🎵", layout="wide")
+st.set_page_config(page_title="şarkılar seni söyler", page_icon="🎵", layout="wide")
 
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
