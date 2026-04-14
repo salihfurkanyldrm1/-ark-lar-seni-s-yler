@@ -9,7 +9,7 @@ import io
 # --- 1. FIREBASE BAĞLANTISI ---
 if not firebase_admin._apps:
     try:
-        # Secrets içindeki private_key'deki ters slashları düzelt
+        # Secrets'tan Firebase bilgilerini çekiyoruz
         pk = st.secrets["firebase"]["private_key"].replace("\\n", "\n")
         fb_credentials = {
             "type": "service_account",
@@ -21,54 +21,68 @@ if not firebase_admin._apps:
         cred = credentials.Certificate(fb_credentials)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"⚠️ Firebase Hatası: {e}")
+        st.error(f"Firebase Bağlantı Hatası: {e}")
 
 db = firestore.client()
 
-# --- 2. ANALİZ FONKSİYONU (SIGHTENGINE FINAL) ---
-def analyze_face_BTU(image_file):
-    # DİKKAT: 'api_user' kısmına paneldeki ID numaranı yaz!
-    params = {
-        'models': 'face-attributes',
-        'api_user': st.secrets["sightengine_user"],
-        'api_secret': st.secrets["sightengine_secret"]
-    }
-    files = {'media': image_file.getvalue()}
+# --- 2. FACE++ ANALİZ FONKSİYONU ---
+def analyze_face_plusplus(image_file):
+    API_KEY = st.secrets["facepp_key"]
+    API_SECRET = st.secrets["facepp_secret"]
+    URL = "https://api-us.faceplusplus.com/facepp/v3/detect"
+
+    image_data = image_file.getvalue()
     
+    # Face++ Parametreleri
+    data = {
+        "api_key": API_KEY,
+        "api_secret": API_SECRET,
+        "return_attributes": "emotion"
+    }
+    files = {"image_file": image_data}
+
     try:
-        r = requests.post('https://api.sightengine.com/1.0/check.json', files=files, data=params)
-        output = r.json()
-        
-        if output['status'] == 'success' and output['faces']:
-            attr = output['faces'][0]['attributes']
+        response = requests.post(URL, data=data, files=files)
+        res_json = response.json()
+
+        if "faces" in res_json and len(res_json["faces"]) > 0:
+            emotions = res_json["faces"][0]["attributes"]["emotion"]
             
-            # API'den gelen dudak/yüz verileri
-            smile = attr.get('smile', 0)
-            sad_val = attr.get('sad', 0)
-            mouth_open = attr.get('mouth_open', 0)
-            
-            # --- MANTIKSAL KARAR (Sıfır Nötr Mantığı) ---
-            if smile > 0.15 or mouth_open > 0.4:
+            # --- FURKAN'IN AYDINLIK MANTIĞI (Nötr'ü Ezme) ---
+            # Eğer mutluluk %15'ten fazlaysa, sistem nötr dese bile 'Happy' sayıyoruz.
+            if emotions["happiness"] > 15:
                 dom = "happy"
-                score = int(max(smile, mouth_open) * 100)
-            elif sad_val > 0.15:
+                score = int(emotions["happiness"])
+            elif emotions["sadness"] > 15:
                 dom = "sad"
-                score = int(sad_val * 100)
+                score = int(emotions["sadness"])
+            elif emotions["anger"] > 15:
+                dom = "angry"
+                score = int(emotions["anger"])
             else:
-                # API 'anlamadım' diyorsa (Nötrse) biz "Normal/Sakin" diyoruz
-                dom = "happy" 
-                score = 65 # Sunumda boş görünmesin
-                
+                # Gerçekten hiçbir şey yoksa nötr kal
+                dom_raw = max(emotions, key=emotions.get)
+                mapping = {
+                    "happiness": "happy", "sadness": "sad", 
+                    "neutral": "neutral", "anger": "angry",
+                    "surprise": "surprise", "disgust": "angry", "fear": "sad"
+                }
+                dom = mapping.get(dom_raw, "neutral")
+                score = int(emotions[dom_raw])
+            
             return dom, score
             
-        return "happy", 50
-    except:
-        return "happy", 50
+        return "neutral", 0
+    except Exception as e:
+        st.error(f"Face++ API Hatası: {e}")
+        return "neutral", 0
 
+# --- 3. YOUTUBE İÇERİK ÇEKİCİ ---
 def get_yt_content(mood, api_key):
-    # Playlist ID'lerini secrets'tan al (playlist_happy, playlist_sad vb.)
+    # Mood'a göre playlist seç (Secrets'tan ID'leri alır)
     p_id = st.secrets.get(f"playlist_{mood}", st.secrets["playlist_neutral"])
     url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={p_id}&key={api_key}"
+    
     try:
         r = requests.get(url).json()
         if 'items' in r and len(r['items']) > 0:
@@ -82,32 +96,35 @@ def get_yt_content(mood, api_key):
     except:
         return None
 
-# --- 3. ARAYÜZ ---
-st.set_page_config(page_title="Şarkılar Seni Söyler", layout="wide")
+# --- 4. STREAMLIT ARAYÜZÜ ---
+st.set_page_config(page_title="Mood-Fi: Face++ AI", layout="wide")
 
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
 
 if not st.session_state.auth:
     st.title("🎵 Şarkılar Seni Söyler")
-    st.markdown("### Bursa Teknik Üniversitesi - Bitirme Sunumu")
+    st.markdown("### Bursa Teknik Üniversitesi - Bulut Bilişim Final Projesi")
     u = st.text_input("Kullanıcı")
     p = st.text_input("Şifre", type="password")
-    if st.button("Giriş Yap"):
+    if st.button("Sisteme Giriş"):
         st.session_state.auth, st.session_state.user = True, u; st.rerun()
 else:
     with st.sidebar:
         st.subheader(f"👤 {st.session_state.user}")
-        if st.button("Çıkış"): st.session_state.auth = False; st.rerun()
+        if st.button("🚪 Güvenli Çıkış"):
+            st.session_state.auth = False; st.rerun()
 
+    st.header("🔍 Gerçek Zamanlı Duygu Analizi (Face++)")
     cam = st.camera_input("Analiz için bir fotoğraf çek")
+    
     if cam:
-        with st.spinner("AI Duygularını Ayıklıyor..."):
-            mood, score = analyze_face_BTU(cam)
+        with st.spinner("Face++ Bulut AI Analiz Ediyor..."):
+            mood, score = analyze_face_plusplus(cam)
             yt = get_yt_content(mood, st.secrets["youtube_api_key"])
             
             if yt:
-                # Firebase Kaydı
+                # Firebase Geçmişine Kaydet
                 try:
                     db.collection('mood_history').add({
                         'username': st.session_state.user,
@@ -117,14 +134,17 @@ else:
                     })
                 except: pass
                 
+                st.divider()
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.header(f"Analiz Sonucu: {mood.upper()} ✨")
+                    st.header(f"Tespit Edilen Mod: {mood.upper()}")
                     st.progress(score)
-                    if mood == "happy": st.success("Yüzünde güller açıyor! 😊")
-                    else: st.warning("Modunu biraz yükseltelim... ❤️")
+                    st.write(f"Analiz Hassasiyeti: %{score}")
+                    if mood == "happy": st.success("Harika görünüyorsun! Enerjin yüksek. 😊")
+                    elif mood == "sad": st.warning("Modunu yükseltmek için sana özel bir şarkı... ❤️")
+                    else: st.info("Sakin ve dengeli bir moddasın. ☕")
                 
                 with c2:
-                    st.subheader(f"🎵 {yt['title']}")
-                    st.image(yt['thumb'])
+                    st.subheader(f"🎵 Öneri: {yt['title']}")
+                    st.image(yt['thumb'], use_container_width=True)
                     st.link_button("▶️ YouTube'da Dinle", f"https://music.youtube.com/watch?v={yt['v_id']}")
