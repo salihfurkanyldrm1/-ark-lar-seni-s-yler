@@ -53,7 +53,6 @@ def analyze_face_logic(image_file):
             dom_raw = max(emotions, key=emotions.get)
             dom = mapping.get(dom_raw, "neutral")
             
-            # Furkan'ın Mantığı: Happiness %12 üzerindeyse Mutlu playlist gelsin
             if emotions["happiness"] > 12: dom = "happy"
             
             scores = {mapping.get(k, k): int(v) for k, v in emotions.items() if mapping.get(k) in TRANSLATION}
@@ -75,16 +74,13 @@ def get_yt_content(mood):
 # --- 4. ARAYÜZ ---
 st.set_page_config(page_title="Şarkılar Seni Söyler", layout="wide")
 
-# Session State Yönetimi
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
 if 'result' not in st.session_state: st.session_state.result = None
 
-# GİRİŞ / KAYIT EKRANI
 if not st.session_state.auth:
     st.title("🎵 Şarkılar Seni Söyler")
     st.markdown("### BTÜ Bulut Bilişim Sunumu")
-    
     tab_login, tab_register = st.tabs(["🔐 Giriş Yap", "📝 Kayıt Ol"])
     
     with tab_login:
@@ -115,7 +111,6 @@ if not st.session_state.auth:
                 except: st.error("Veritabanı hatası!")
             else: st.error("Veritabanı bağlı değil, kayıt yapılamaz.")
 
-# ANA UYGULAMA EKRANI
 else:
     with st.sidebar:
         st.subheader(f"👤 {st.session_state.user}")
@@ -129,7 +124,6 @@ else:
     tab_anlz, tab_hist = st.tabs(["🔍 Duygu Analizi", "📂 Geçmiş Kayıtlar"])
 
     with tab_anlz:
-        # Eğer henüz bir sonuç yoksa kamera inputu göster
         if st.session_state.result is None:
             cam = st.camera_input("Fotoğraf Çek ve Modunu Bul")
             if cam:
@@ -148,8 +142,6 @@ else:
                             except: pass
                         st.session_state.result = {"mood": mood, "scores": scores, "yt": yt}
                         st.rerun()
-        
-        # Sonuç varsa ekrana yazdır ve "Tekrar Dene" butonunu göster
         else:
             res = st.session_state.result
             c1, c2 = st.columns(2)
@@ -159,27 +151,35 @@ else:
                     if k in TRANSLATION:
                         st.write(f"**{TRANSLATION[k]}**")
                         st.progress(v)
-                
-                # TEKRAR DENE BUTONU
                 if st.button("🔄 Tekrar Dene"):
                     st.session_state.result = None
                     st.rerun()
-                    
             with c2:
                 st.subheader(f"🎵 Öneri: {res['yt']['title']}")
                 st.image(res['yt']['thumb'], use_container_width=True)
-                st.link_button("▶️ YouTube'da Dinle", f"https://music.youtube.com/watch?v={res['yt']['v_id']}")
+                st.link_button("▶️ Dinle", f"https://music.youtube.com/watch?v={res['yt']['v_id']}")
 
     with tab_hist:
         if db:
             try:
-                docs = db.collection('mood_history').where('username', '==', st.session_state.user).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
+                # --- BURASI DÜZELDİ: Indeks hatası almamak için sıralamayı Python tarafına çektik ---
+                docs = db.collection('mood_history').where('username', '==', st.session_state.user).stream()
+                
+                history_list = []
                 for doc in docs:
-                    dat = doc.to_dict()
-                    ts = dat.get('timestamp')
-                    t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni"
-                    st.write(f"📅 {t_str} | **{dat.get('emotion')}** - {dat.get('song')}")
-            except:
-                st.info("Geçmiş kayıtlar yüklenirken bir sorun oluştu.")
+                    history_list.append(doc.to_dict())
+                
+                # Tarihe göre büyükten küçüğe sırala (En yeni en üstte)
+                history_list.sort(key=lambda x: x.get('timestamp') if x.get('timestamp') else 0, reverse=True)
+                
+                if history_list:
+                    for dat in history_list[:10]: # Son 10 kayıt
+                        ts = dat.get('timestamp')
+                        t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni"
+                        st.write(f"📅 {t_str} | **{dat.get('emotion')}** - {dat.get('song')}")
+                else:
+                    st.info("Henüz bir geçmiş kaydınız bulunmuyor.")
+            except Exception as e:
+                st.info(f"Kayıtlar listelenirken bir sorun oluştu.")
         else:
             st.warning("Veritabanı bağlı değil.")
