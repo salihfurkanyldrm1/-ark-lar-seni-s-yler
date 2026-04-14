@@ -1,6 +1,4 @@
 streamlit
-opencv-python-headless
-numpy
+requests
 firebase-admin
 pillow
-requests
