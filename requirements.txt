@@ -4,6 +4,3 @@ tensorflow-cpu==2.15.0
 opencv-python-headless
 tf-keras
 firebase-admin
-pillow
-requests
-numpy==1.26.4
