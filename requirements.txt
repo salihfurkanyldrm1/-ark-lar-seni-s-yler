@@ -1,7 +1,8 @@
 streamlit
-fer
+deepface==0.0.92
 tensorflow-cpu==2.15.0
 opencv-python-headless
+tf-keras
 firebase-admin
 pillow
 requests
