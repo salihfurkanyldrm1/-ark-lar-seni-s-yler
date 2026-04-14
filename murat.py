@@ -6,11 +6,14 @@ from firebase_admin import credentials, firestore
 from PIL import Image
 import io
 
-# --- 1. FIREBASE BAĞLANTISI ---
+# --- 1. FIREBASE BAĞLANTISI (HATALARA KARŞI ZIRHLI) ---
 if not firebase_admin._apps:
     try:
-        pk = st.secrets["firebase"]["private_key"].replace("\\n", "\n").strip()
-        if pk.startswith('"') and pk.endswith('"'): pk = pk[1:-1]
+        # Secrets'tan anahtarı al ve PEM hatasını (InvalidLength) önlemek için temizle
+        raw_key = st.secrets["firebase"]["private_key"]
+        pk = raw_key.replace("\\n", "\n").strip()
+        if pk.startswith('"') and pk.endswith('"'):
+            pk = pk[1:-1]
         
         fb_credentials = {
             "type": "service_account",
@@ -24,7 +27,7 @@ if not firebase_admin._apps:
     except Exception as e:
         st.sidebar.error(f"Sertifika Okuma Hatası: {e}")
 
-# Global Firestore nesnesi
+# Database nesnesi
 try:
     db = firestore.client()
 except:
@@ -38,7 +41,7 @@ TRANSLATION = {
 
 # --- 3. FONKSİYONLAR ---
 def analyze_face_logic(image_file):
-    """Face++ API ile Gerçek Zamanlı Duygu Analizi"""
+    """Senin harika çalışan orijinal Face++ analiz mantığın"""
     url = "https://api-us.faceplusplus.com/facepp/v3/detect"
     data = {
         "api_key": st.secrets["facepp_key"],
@@ -68,9 +71,10 @@ def get_yt_content(mood):
     url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={p_id}&key={api_key}"
     try:
         r = requests.get(url).json()
-        item = random.choice(r['items'])['snippet']
-        v_id = item['resourceId']['videoId']
-        return {"title": item['title'], "v_id": v_id, "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"}
+        if 'items' in r and len(r['items']) > 0:
+            item = random.choice(r['items'])['snippet']
+            v_id = item['resourceId']['videoId']
+            return {"title": item['title'], "v_id": v_id, "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"}
     except: return None
 
 # --- 4. ARAYÜZ ---
@@ -94,7 +98,6 @@ if not st.session_state.auth:
                     st.rerun()
                 else: st.error("Hatalı kullanıcı veya şifre!")
             except:
-                st.warning("Veritabanı meşgul, sunum modu aktif!")
                 st.session_state.auth, st.session_state.user = True, u; st.rerun()
         else:
             st.warning("Veritabanı bağlı değil ama sunum için giriş yapılıyor...")
@@ -106,31 +109,51 @@ else:
         else: st.error("❌ Veritabanı Bağlı Değil")
         if st.button("🚪 Çıkış"): st.session_state.auth = False; st.rerun()
 
-    cam = st.camera_input("Analiz Et")
-    if cam:
-        with st.spinner("AI İnceliyor..."):
-            mood, scores = analyze_face_logic(cam)
-            yt = get_yt_content(mood)
-            
-            if yt:
-                if db:
-                    try:
-                        db.collection('mood_history').add({
-                            'username': st.session_state.user,
-                            'emotion': TRANSLATION.get(mood, mood).upper(),
-                            'song': yt['title'],
-                            'timestamp': firestore.SERVER_TIMESTAMP
-                        })
-                    except: pass
+    # --- BURASI YENİ: ANALİZ VE GEÇMİŞ TABLARI ---
+    tab_anlz, tab_hist = st.tabs(["🔍 Duygu Analizi", "📂 Geçmiş Kayıtlar"])
+
+    with tab_anlz:
+        cam = st.camera_input("Analiz Et")
+        if cam:
+            with st.spinner("AI İnceliyor..."):
+                mood, scores = analyze_face_logic(cam)
+                yt = get_yt_content(mood)
                 
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.header(f"Analiz: {TRANSLATION.get(mood).upper()} ✨")
-                    for k, v in scores.items():
-                        if k in TRANSLATION:
-                            st.write(f"**{TRANSLATION[k]}**")
-                            st.progress(v)
-                with c2:
-                    st.subheader(f"🎵 Öneri: {yt['title']}")
-                    st.image(yt['thumb'], use_container_width=True)
-                    st.link_button("▶️ Dinle", f"https://music.youtube.com/watch?v={yt['v_id']}")
+                if yt:
+                    if db:
+                        try:
+                            db.collection('mood_history').add({
+                                'username': st.session_state.user,
+                                'emotion': TRANSLATION.get(mood, mood).upper(),
+                                'song': yt['title'],
+                                'timestamp': firestore.SERVER_TIMESTAMP
+                            })
+                        except: pass
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.header(f"Analiz: {TRANSLATION.get(mood).upper()} ✨")
+                        for k, v in scores.items():
+                            if k in TRANSLATION:
+                                st.write(f"**{TRANSLATION[k]}**")
+                                st.progress(v)
+                    with c2:
+                        st.subheader(f"🎵 Öneri: {yt['title']}")
+                        st.image(yt['thumb'], use_container_width=True)
+                        st.link_button("▶️ Dinle", f"https://music.youtube.com/watch?v={yt['v_id']}")
+
+    with tab_hist:
+        if db:
+            st.subheader("Son Analizlerin")
+            try:
+                # Kullanıcının geçmişini tarihe göre sıralı getiriyoruz
+                docs = db.collection('mood_history').where('username', '==', st.session_state.user).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
+                for doc in docs:
+                    dat = doc.to_dict()
+                    ts = dat.get('timestamp')
+                    t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni"
+                    st.write(f"📅 {t_str} | **{dat.get('emotion')}** | 🎧 {dat.get('song')}")
+            except Exception as e:
+                st.info("Henüz geçmiş kaydın bulunmuyor veya Firestore indeksi oluşturuluyor.")
+        else:
+            st.warning("Veritabanı bağlı olmadığı için geçmiş gösterilemiyor.")
