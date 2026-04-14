@@ -1,0 +1,8 @@
+streamlit
+deepface
+opencv-python-headless
+tf-keras
+firebase-admin
+pillow
+requests
+numpy
