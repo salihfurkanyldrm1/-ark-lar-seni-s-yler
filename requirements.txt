@@ -1,6 +1,5 @@
 streamlit
-fer
-tensorflow-cpu==2.15.0
+mediapipe
 opencv-python-headless
 firebase-admin
 pillow
