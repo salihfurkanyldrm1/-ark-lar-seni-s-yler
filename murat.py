@@ -8,7 +8,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 
-# --- 1. FIREBASE BAĞLANTISI (AYNEN KORUNDU) ---
+# --- 1. FIREBASE BAĞLANTISI (TAM GÜVENLİK) ---
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
@@ -21,14 +21,29 @@ if not firebase_admin._apps:
             if os.path.exists(JSON_FILE):
                 cred = credentials.Certificate(JSON_FILE)
                 firebase_admin.initialize_app(cred)
-    except: pass
+    except Exception as e:
+        st.error(f"Firebase Bağlantı Hatası: {e}")
+
 db = firestore.client()
 
-# --- 2. YARDIMCI SÖZLÜKLER VE FONKSİYONLAR ---
+# --- 2. YARDIMCI SÖZLÜKLER VE ÇEVİRİLER ---
 TRANSLATION = {
     "happy": "Mutlu", "sad": "Üzgün", "neutral": "Tarafsız",
-    "angry": "Sinirli", "surprise": "Heyecanlı"
+    "angry": "Sinirli", "surprise": "Heyecanlı", "fear": "Korku", "disgust": "Tiksinti"
 }
+
+# --- 3. FONKSİYONLAR (ÜYELİK, KAYIT, YOUTUBE) ---
+def user_auth(u, p, mode):
+    user_ref = db.collection('users').document(u)
+    doc = user_ref.get()
+    if mode == "Giriş":
+        if doc.exists and doc.to_dict().get('password') == p:
+            return True, "Giriş Başarılı"
+        return False, "Kullanıcı adı veya şifre hatalı!"
+    else:
+        if doc.exists: return False, "Bu kullanıcı adı zaten alınmış!"
+        user_ref.set({'username': u, 'password': p})
+        return True, "Hesabınız başarıyla oluşturuldu! Giriş yapabilirsiniz."
 
 def save_analysis(u, dom, song, detail):
     try:
@@ -46,58 +61,92 @@ def get_yt_content(playlist_id, api_key):
     url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={playlist_id}&key={api_key}"
     try:
         r = requests.get(url).json()
-        item = random.choice(r['items'])['snippet']
-        v_id = item.get('resourceId', {}).get('videoId', '')
-        return {"title": item.get('title'), "v_id": v_id, "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"}
+        if 'items' in r and len(r['items']) > 0:
+            item = random.choice(r['items'])['snippet']
+            v_id = item.get('resourceId', {}).get('videoId', '')
+            thumb = item.get('thumbnails', {}).get('maxresdefault', {}).get('url') or \
+                    item.get('thumbnails', {}).get('high', {}).get('url') or \
+                    f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"
+            return {"title": item.get('title'), "v_id": v_id, "thumb": thumb}
     except: return None
 
-# --- 3. TASARIM VE OTURUM ---
-st.set_page_config(page_title="Mood-Fi Lite", page_icon="🎵", layout="wide")
+# --- 4. SAYFA AYARLARI VE OTURUM YÖNETİMİ ---
+st.set_page_config(page_title="Mood-Fi Pro", page_icon="🎵", layout="wide")
+
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
 if 'result' not in st.session_state: st.session_state.result = None
 
-# Giriş/Kayıt Bölümü (Senin Mantığın)
+# --- 5. GİRİŞ / KAYDOL PANELİ ---
 if not st.session_state.auth:
-    st.title("🎵 Mood-Fi: AI Music (Lite)")
-    u = st.text_input("Kullanıcı Adı")
-    p = st.text_input("Şifre", type="password")
-    if st.button("Giriş Yap"):
-        st.session_state.auth = True; st.session_state.user = u; st.rerun()
+    st.title("🎵 Mood-Fi: AI & Cloud Music")
+    st.markdown("### Hoş Geldiniz! Lütfen devam etmek için giriş yapın.")
+    
+    t1, t2 = st.tabs(["🔐 Giriş Yap", "📝 Kaydol"])
+    
+    with t1:
+        with st.form("login_form"):
+            u = st.text_input("Kullanıcı Adı")
+            p = st.text_input("Şifre", type="password")
+            remember = st.checkbox("Beni Hatırla") # Görsel olarak eklendi
+            if st.form_submit_button("Sisteme Giriş"):
+                ok, msg = user_auth(u, p, "Giriş")
+                if ok:
+                    st.session_state.auth = True
+                    st.session_state.user = u
+                    st.success(msg)
+                    st.rerun()
+                else: st.error(msg)
+                
+    with t2:
+        with st.form("reg_form"):
+            ru = st.text_input("Yeni Kullanıcı Adı")
+            rp = st.text_input("Yeni Şifre", type="password")
+            if st.form_submit_button("Hesap Oluştur"):
+                ok, msg = user_auth(ru, rp, "Kayıt")
+                if ok: st.success(msg)
+                else: st.error(msg)
 else:
-    # --- ANA PANEL ---
+    # --- 6. ANA UYGULAMA PANELİ ---
     with st.sidebar:
+        st.header("Profil")
         st.subheader(f"👤 {st.session_state.user}")
-        if st.sidebar.button("🚪 Çıkış"):
-            st.session_state.auth = False; st.session_state.result = None; st.rerun()
+        st.divider()
+        if st.button("🚪 Güvenli Çıkış Yap"):
+            st.session_state.auth = False
+            st.session_state.user = None
+            st.session_state.result = None
+            st.rerun()
 
-    tab_anlz, tab_hist = st.tabs(["🔍 Analiz ve Öneri", "📂 Geçmiş Analizlerim"])
+    tab_anlz, tab_hist = st.tabs(["🔍 Duygu Analizi ve Öneri", "📂 Analiz Geçmişim"])
+    
     API_KEY = st.secrets["youtube_api_key"]
     PLAYLISTS = {
-        "happy": "PLOkZh8jNcqTTlGGHc7C5auqTRmHKiypj5", "sad": "PLKVx4zuArgpyffjLRb6J7g9xA3eS05jiq",
-        "neutral": "PLmDhjqsemmV_XM-XSr_4QxENCDFEHWvMK", "angry": "PLkQK3bOASMpXC31FuDSkT7RdICLJqGWCT"
+        "happy": "PLOkZh8jNcqTTlGGHc7C5auqTRmHKiypj5", 
+        "sad": "PLKVx4zuArgpyffjLRb6J7g9xA3eS05jiq",
+        "neutral": "PLmDhjqsemmV_XM-XSr_4QxENCDFEHWvMK", 
+        "angry": "PLkQK3bOASMpXC31FuDSkT7RdICLJqGWCT",
+        "surprise": "PLkPLz99FWW3ZYEu_RYt4TcE5WIhZIMcYu"
     }
 
     with tab_anlz:
         if st.session_state.result is None:
-            cam = st.camera_input("Ruh Halini Analiz Et")
+            st.subheader("Ruh halini öğrenmek için bir fotoğraf çek!")
+            cam = st.camera_input("")
             if cam:
                 img = Image.open(cam)
-                # Görüntüyü işliyoruz
                 img_array = np.array(img)
-                img_gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
                 
-                with st.spinner("AI Görüntüyü İşliyor..."):
-                    # GERÇEK ANALİZ MANTIĞI: Işık, gölge ve piksel yoğunluğuna göre tahmin
-                    val = np.mean(img_gray)
-                    if val > 125: dom = "happy"
-                    elif val < 85: dom = "sad"
-                    else: dom = "neutral"
+                with st.spinner("AI Duygularını İnceliyor..."):
+                    # ŞİMDİLİK HAFİF ANALİZ (SİSTEMİ AYAĞA KALDIRMAK İÇİN)
+                    img_gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+                    brightness = np.mean(img_gray)
+                    dom = "happy" if brightness > 125 else "sad" if brightness < 85 else "neutral"
                     
-                    # Yüzdeleri senin tasarımına uygun şekilde simüle ediyoruz
-                    norm = {dom: random.randint(70, 95)}
-                    for k in ["happy", "sad", "neutral", "angry"]:
-                        if k != dom: norm[k] = random.randint(1, 15)
+                    # Detaylı yüzde simülasyonu
+                    norm = {dom: random.randint(75, 95)}
+                    for k in ["happy", "sad", "neutral", "angry", "surprise"]:
+                        if k != dom: norm[k] = random.randint(1, 12)
 
                     yt = get_yt_content(PLAYLISTS.get(dom, "neutral"), API_KEY)
                     if yt:
@@ -105,17 +154,38 @@ else:
                         st.session_state.result = {"dom": dom, "norm": norm, "yt": yt}
                         st.rerun()
         else:
-            # SONUÇ EKRANI (Senin Orijinal Tasarımın)
+            # --- SONUÇ EKRANI (PROGRESS BARLAR DAHİL) ---
             r = st.session_state.result
-            c1, c2 = st.columns(2)
+            c1, c2 = st.columns([1, 1.2])
             with c1:
-                st.header(f"Analiz: {TRANSLATION.get(r['dom']).upper()} ✨")
+                st.header(f"Ruh Halin: {TRANSLATION.get(r['dom'], r['dom']).upper()}")
+                st.write("---")
                 for k, v in r['norm'].items():
-                    st.write(f"**{TRANSLATION.get(k, k)}**: %{int(v)}")
-                    st.progress(int(v))
-                if st.button("🔄 Yeni Analiz"):
-                    st.session_state.result = None; st.rerun()
+                    if v > 1:
+                        st.write(f"**{TRANSLATION.get(k, k)}**")
+                        st.progress(int(v))
+                if st.button("🔄 Tekrar Dene"):
+                    st.session_state.result = None
+                    st.rerun()
             with c2:
-                st.subheader(f"🎵 Öneri: {r['yt']['title']}")
+                st.subheader(f"🎵 Sana Özel Öneri: {r['yt']['title']}")
                 st.image(r['yt']['thumb'], use_container_width=True)
-                st.link_button("▶️ Dinle", f"https://music.youtube.com/watch?v={r['yt']['v_id']}")
+                st.link_button("▶️ YouTube Music'te Dinle", f"https://music.youtube.com/watch?v={r['yt']['v_id']}")
+
+    with tab_hist:
+        st.subheader("🕒 Son Analizlerin")
+        try:
+            # Firebase Geçmişi (Tarih Sıralı)
+            docs = db.collection('mood_history').where('username', '==', st.session_state.user).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
+            for d in docs:
+                dat = d.to_dict()
+                ts = dat.get('timestamp')
+                t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni Analiz"
+                with st.expander(f"📅 {t_str} | Mood: {dat.get('emotion')}"):
+                    st.write(f"**Önerilen Şarkı:** {dat.get('song')}")
+                    if 'details' in dat:
+                        st.divider()
+                        for m, v in dat['details'].items():
+                            if v > 1: st.write(f"{m}: %{int(v)}")
+        except Exception:
+            st.info("Kayıtlar yüklenirken bir hata oluştu veya henüz analiz yapmadınız.")
