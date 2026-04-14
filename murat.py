@@ -107,6 +107,8 @@ if not st.session_state.auth:
                 else: st.error("Kullanıcı Mevcut!")
 else:
     # --- 5. ANA PANEL ---
+    else:
+    # --- 5. ANA PANEL ---
     with st.sidebar:
         st.subheader(f"👤 {st.session_state.user}")
         if st.button("🚪 Çıkış"): 
@@ -115,60 +117,57 @@ else:
 
     tab_anlz, tab_hist = st.tabs(["🔍 Cloud Analizi", "📂 Geçmişim"])
     
-    API_KEY = st.secrets["youtube_api_key"]
-    PLAYLISTS = {
+    Y_KEY = st.secrets["youtube_api_key"]
+    # Secrets'tan playlistleri çekiyoruz
+    PLAYS = {
         "happy": st.secrets["playlist_happy"], 
         "sad": st.secrets["playlist_sad"], 
         "neutral": st.secrets["playlist_neutral"]
     }
 
-   with tab_anlz:
-        cam = st.camera_input("Ruh Halini Bulutta Analiz Et")
+    with tab_anlz:
+        cam = st.camera_input("Ruh Halini Analiz Et")
         if cam:
-            # Görüntüyü API'ye göndermek için bytes formatına çeviriyoruz
-            img_bytes = cam.getvalue()
-            
-            with st.spinner("AI Sunucuları Analiz Ediyor... (Lütfen Bekleyin)"):
+            i_bytes = cam.getvalue()
+            with st.spinner("AI Analizi Bulutta Yapılıyor..."):
                 try:
-                    # Işık mantığını sildik, DİREKT API'YE SORUYORUZ
-                    result = query_hf_api(img_bytes)
+                    # Işık mantığını tamamen sildik, sadece API'ye soruyoruz
+                    res = query_hf_api(i_bytes)
                     
-                    # Eğer model yükleniyorsa uyarı verir, fonksiyonun içine bu kontrolü koymuştuk
-                    if result and isinstance(result, list):
-                        # En yüksek puanlı sonucu al
-                        top_emotion = result[0]
-                        dom = top_emotion['label'].lower() # 'Happy', 'Sad', 'Neutral' vb.
-                        score = top_emotion['score'] * 100
+                    if res and isinstance(res, list):
+                        top_res = res[0]
+                        dom = top_res['label'].lower()
+                        scr = top_res['score'] * 100
                         
-                        # Çeviri ve Playlist Seçimi
-                        # API'den bazen 'joy' veya 'smile' gelebilir, onları 'happy'ye eşitleyelim
+                        # API'den gelen farklı etiketleri bizim playlistlere eşliyoruz
                         if dom in ["joy", "happy", "smile"]: mood_key = "happy"
                         elif dom in ["sad", "disappointed"]: mood_key = "sad"
                         else: mood_key = "neutral"
 
-                        yt = get_yt_content(PLAYLISTS.get(mood_key, PLAYLISTS["neutral"]), API_KEY)
-                        
+                        yt = get_yt_content(PLAYS.get(mood_key, PLAYS["neutral"]), Y_KEY)
                         if yt:
-                            # Firebase'e Kaydet
-                            save_analysis(st.session_state.user, mood_key, yt['title'], score)
-                            
+                            save_analysis(st.session_state.user, mood_key, yt['title'], scr)
                             c1, c2 = st.columns(2)
                             with c1:
                                 st.header(f"Mood: {TRANSLATION.get(mood_key, 'Tarafsız').upper()} ✨")
-                                st.metric("AI Güven Oranı", f"%{int(score)}")
-                                if st.button("🔄 Yeni Fotoğraf"): st.rerun()
+                                st.metric("AI Güven Skoru", f"%{int(scr)}")
+                                if st.button("🔄 Yenile"): st.rerun()
                             with c2:
                                 st.subheader(f"🎵 Öneri: {yt['title']}")
                                 st.image(yt['thumb'])
-                                st.link_button("▶️ YouTube'da Dinle", f"https://music.youtube.com/watch?v={yt['v_id']}")
-                except Exception as e:
-                    st.error("Bulut sunucusu şu an yoğun, lütfen 5 saniye sonra tekrar deneyin.")
+                                st.link_button("▶️ Dinle", f"https://music.youtube.com/watch?v={yt['v_id']}")
+                except:
+                    st.warning("Bulut sunucusu şu an yoğun, lütfen tekrar deneyin.")
 
     with tab_hist:
-        docs = db.collection('mood_history').where('username', '==', st.session_state.user).stream()
-        h_list = sorted([d.to_dict() for d in docs], key=lambda x: x.get('timestamp', 0), reverse=True)
-        for dat in h_list[:10]:
-            ts = dat.get('timestamp')
-            t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni"
-            with st.expander(f"📅 {t_str} | {dat.get('emotion')}"):
-                st.write(f"Şarkı: {dat.get('song')} (Skor: %{dat.get('ai_score')})")
+        st.subheader("🕒 Son Analizlerin")
+        try:
+            docs = db.collection('mood_history').where('username', '==', st.session_state.user).stream()
+            h_list = sorted([d.to_dict() for d in docs], key=lambda x: x.get('timestamp', 0), reverse=True)
+            for dat in h_list[:10]:
+                ts = dat.get('timestamp')
+                t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni"
+                with st.expander(f"📅 {t_str} | {dat.get('emotion')}"):
+                    st.write(f"Şarkı: {dat.get('song')} (AI Skor: %{dat.get('ai_score', 0)})")
+        except:
+            st.info("Henüz kayıt bulunamadı.")
