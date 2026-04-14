@@ -26,24 +26,32 @@ db = firestore.client()
 
 # --- 2. FONKSİYONLAR ---
 def query_hf_api(image_bytes):
-    """Hata toleranslı ve zaman aşımlı API sorgusu"""
+    """JSON Decode hatasını engelleyen, en dayanıklı API sorgusu"""
     import time
     for i in range(3):
         try:
-            # timeout=30 ekledik: Sunucu cevap verene kadar 30 saniye bekler
+            # 30 saniye cevap bekleme sınırı
             response = requests.post(API_URL, headers=headers, data=image_bytes, timeout=30)
+            
+            # Eğer sunucu 200 (OK) dönmediyse JSON okumaya çalışma
+            if response.status_code != 200:
+                time.sleep(2)
+                continue
+            
             res = response.json()
             
+            # Sunucu uyanıyorsa bekle
             if isinstance(res, dict) and "estimated_time" in res:
-                st.warning(f"AI Uyandırılıyor... {int(res['estimated_time'])} saniye.")
                 time.sleep(5)
                 continue
+                
             return res
-        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError):
+            
+        except Exception as e:
+            # Herhangi bir hatada (JSON, Bağlantı vb.) uygulamayı çökertme, tekrar dene
             if i < 2:
                 time.sleep(2)
                 continue
-            st.error("Bağlantı yarıda kesildi. Lütfen tekrar fotoğraf çekin.")
     return None
 def user_auth(u, p, mode):
     user_ref = db.collection('users').document(u)
