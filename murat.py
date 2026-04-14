@@ -1,5 +1,5 @@
 import streamlit as st
-from deepface import DeepFace
+from fer import FER  # DeepFace yerine hafif FER motoru
 from PIL import Image
 import numpy as np
 import random
@@ -8,18 +8,15 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 
-# --- 1. FIREBASE BAĞLANTISI (DEPLOY UYUMLU - DOKUNULMADI SADECE GÜÇLENDİRİLDİ) ---
+# --- 1. FIREBASE BAĞLANTISI (DEĞİŞTİRİLMEDİ) ---
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
-            # Streamlit Cloud üzerinde (Secrets kullanarak) bağlantı
             firebase_dict = dict(st.secrets["firebase"])
-            # Özel anahtar içindeki alt satır karakterlerini düzeltiyoruz
             firebase_dict["private_key"] = firebase_dict["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(firebase_dict)
             firebase_admin.initialize_app(cred)
         else:
-            # Yerel bilgisayarda (JSON dosyası kullanarak) bağlantı
             JSON_FILE = "sarkilarbizisoyler-b5128-firebase-adminsdk-fbsvc-53af40b6a8.json"
             if os.path.exists(JSON_FILE):
                 cred = credentials.Certificate(JSON_FILE)
@@ -31,7 +28,7 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
-# --- 2. YARDIMCI SÖZLÜKLER VE FONKSİYONLAR (AYNEN KORUNDU) ---
+# --- 2. YARDIMCI SÖZLÜKLER VE FONKSİYONLAR ---
 TRANSLATION = {
     "happy": "Mutlu", "sad": "Üzgün", "neutral": "Tarafsız",
     "angry": "Sinirli", "surprise": "Heyecanlı", "fear": "Korku", "disgust": "Tiksinti"
@@ -79,14 +76,14 @@ def get_yt_content(playlist_id, api_key):
             }
     except: return None
 
-# --- 3. TASARIM VE OTURUM (AYNEN KORUNDU) ---
+# --- 3. TASARIM VE OTURUM ---
 st.set_page_config(page_title="Mood-Fi Final", page_icon="🎵", layout="wide")
 
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
 if 'result' not in st.session_state: st.session_state.result = None
 
-# --- 4. GİRİŞ VE KAYIT (AYNEN KORUNDU) ---
+# --- 4. GİRİŞ VE KAYIT ---
 if not st.session_state.auth:
     st.title("🎵 Mood-Fi: AI & Cloud Music")
     t1, t2 = st.tabs(["Giriş Yap", "Kaydol"])
@@ -110,7 +107,7 @@ if not st.session_state.auth:
                 if ok: st.success(msg)
                 else: st.error(msg)
 else:
-    # --- 5. ANA PANEL (AYNEN KORUNDU) ---
+    # --- 5. ANA PANEL ---
     with st.sidebar:
         st.subheader(f"👤 {st.session_state.user}")
         if st.sidebar.button("🚪 Güvenli Çıkış"):
@@ -120,7 +117,6 @@ else:
 
     tab_anlz, tab_hist = st.tabs(["🔍 Analiz ve Öneri", "📂 Geçmiş Analizlerim"])
 
-    # API_KEY Secrets üzerinden okunacak şekilde güncellendi (Güvenli)
     API_KEY = st.secrets.get("youtube_api_key", "AIzaSyCwahN8cl8ms8Ze--hz08_0PZurHBftkTY")
 
     PLAYLISTS = {
@@ -135,22 +131,26 @@ else:
             if cam:
                 try:
                     img = Image.open(cam)
-                    with st.spinner("Yapay Zeka Okuyor..."):
-                        res = DeepFace.analyze(np.array(img), actions=['emotion'], enforce_detection=True)
-                        raw = res[0]['emotion']
-                        dom = res[0]['dominant_emotion']
-                        total = sum(raw.values())
-                        norm = {k: (v/total)*100 for k,v in raw.items()}
-                        yt = get_yt_content(PLAYLISTS.get(dom, "neutral"), API_KEY)
-                        if yt:
-                            save_analysis(st.session_state.user, dom, yt['title'], norm)
-                            st.session_state.result = {"dom": dom, "norm": norm, "yt": yt}
-                            st.rerun()
+                    img_array = np.array(img)
+                    with st.spinner("AI Duygularını İnceliyor..."):
+                        # Analiz (Hafif Motor)
+                        detector = FER(mtcnn=False) 
+                        analysis = detector.detect_emotions(img_array)
+                        
+                        if analysis:
+                            emotions = analysis[0]["emotions"]
+                            dom = max(emotions, key=emotions.get)
+                            norm = {k: v * 100 for k, v in emotions.items()}
+                            
+                            yt = get_yt_content(PLAYLISTS.get(dom, "neutral"), API_KEY)
+                            if yt:
+                                save_analysis(st.session_state.user, dom, yt['title'], norm)
+                                st.session_state.result = {"dom": dom, "norm": norm, "yt": yt}
+                                st.rerun()
+                        else:
+                            st.error("❌ Yüz algılanamadı! Lütfen tekrar deneyin.")
                 except Exception as e:
-                    st.error("❌ Yüz algılanamadı! Lütfen tekrar deneyin.")
-                    if st.button("🔄 Yeniden Dene"):
-                        st.session_state.result = None
-                        st.rerun()
+                    st.error(f"Analiz sırasında bir hata oluştu: {e}")
         else:
             r = st.session_state.result
             c1, c2 = st.columns(2)
