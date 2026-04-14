@@ -73,7 +73,7 @@ def get_yt_content(playlist_id, api_key):
     except: return None
 
 # --- 4. SAYFA AYARLARI ---
-st.set_page_config(page_title="şarkılar seni söyler", page_icon="🎵", layout="wide")
+st.set_page_config(page_title="Şarkılar Seni Söyler", page_icon="🎵", layout="wide")
 
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
@@ -81,8 +81,8 @@ if 'result' not in st.session_state: st.session_state.result = None
 
 # --- 5. GİRİŞ / KAYIT EKRANI ---
 if not st.session_state.auth:
-    st.title("🎵 Mood-Fi: AI & Cloud Music")
-    st.markdown("### Bursa Teknik Üniversitesi - Proje Sunumu")
+    st.title("🎵 Şarkılar Seni Söyler")
+    st.markdown("### Bulut Bilişim - Proje Ödevi")
     
     t1, t2 = st.tabs(["🔐 Giriş Yap", "📝 Kaydol"])
     with t1:
