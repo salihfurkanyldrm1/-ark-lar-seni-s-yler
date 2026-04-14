@@ -7,31 +7,21 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 
-# --- 1. FIREBASE BAĞLANTISI (ZIRHLANMIŞ & GLOBAL) ---
+# --- 1. FIREBASE BAĞLANTISI ---
 if not firebase_admin._apps:
     try:
         if "firebase" in st.secrets:
-            # Streamlit Cloud Ayarları
             fb_info = dict(st.secrets["firebase"])
             fb_info["private_key"] = fb_info["private_key"].replace("\\n", "\n")
             cred = credentials.Certificate(fb_info)
             firebase_admin.initialize_app(cred)
         else:
-            # Yerel Çalışma Ayarları
             JSON_FILE = "sarkilarbizisoyler-b5128-firebase-adminsdk-fbsvc-53af40b6a8.json"
             if os.path.exists(JSON_FILE):
                 cred = credentials.Certificate(JSON_FILE)
                 firebase_admin.initialize_app(cred)
-            else:
-                st.error("Hata: Firebase kimlik bilgileri bulunamadı!")
-    except Exception as e:
-        st.error(f"Firebase Bağlantı Hatası: {e}")
-
-# db nesnesini fonksiyonların dışında, global olarak tanımlıyoruz
-try:
-    db = firestore.client()
-except Exception as e:
-    st.error("Veritabanı bağlantısı kurulamadı!")
+    except: pass
+db = firestore.client()
 
 # --- 2. YARDIMCI SÖZLÜKLER VE FONKSİYONLAR ---
 TRANSLATION = {
@@ -40,17 +30,16 @@ TRANSLATION = {
 }
 
 def user_auth(u, p, mode):
-    # db değişkenini yukarıdaki global tanımdan alıyoruz
     user_ref = db.collection('users').document(u)
     doc = user_ref.get()
     if mode == "Giriş":
         if doc.exists and doc.to_dict().get('password') == p:
             return True, "Giriş Başarılı"
-        return False, "Kullanıcı adı veya şifre hatalı!"
+        return False, "Hatalı Giriş!"
     else:
-        if doc.exists: return False, "Bu kullanıcı zaten mevcut!"
+        if doc.exists: return False, "Kullanıcı Mevcut"
         user_ref.set({'username': u, 'password': p})
-        return True, "Kayıt Başarılı"
+        return True, "Kaydolundu"
 
 def save_analysis(u, dom, song, detail):
     try:
@@ -68,13 +57,9 @@ def get_yt_content(playlist_id, api_key):
     url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={playlist_id}&key={api_key}"
     try:
         r = requests.get(url).json()
-        if 'items' in r and len(r['items']) > 0:
-            item = random.choice(r['items'])['snippet']
-            v_id = item.get('resourceId', {}).get('videoId', '')
-            thumb = item.get('thumbnails', {}).get('maxresdefault', {}).get('url') or \
-                    item.get('thumbnails', {}).get('high', {}).get('url') or \
-                    f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"
-            return {"title": item.get('title'), "v_id": v_id, "thumb": thumb}
+        item = random.choice(r['items'])['snippet']
+        v_id = item.get('resourceId', {}).get('videoId', '')
+        return {"title": item.get('title'), "v_id": v_id, "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"}
     except: return None
 
 # --- 3. SAYFA AYARLARI VE OTURUM ---
@@ -105,13 +90,13 @@ if not st.session_state.auth:
             rp = st.text_input("Yeni Şifre", type="password")
             if st.form_submit_button("Hesap Oluştur"):
                 ok, msg = user_auth(ru, rp, "Kaydol")
-                if ok: st.success("Hesap oluşturuldu! Şimdi giriş yapabilirsiniz.")
+                if ok: st.success("Hesap oluşturuldu! Giriş yapabilirsiniz.")
                 else: st.error(msg)
 else:
     # --- 5. ANA PANEL ---
     with st.sidebar:
         st.subheader(f"👤 {st.session_state.user}")
-        if st.sidebar.button("🚪 Güvenli Çıkış"): 
+        if st.button("🚪 Güvenli Çıkış"): 
             st.session_state.auth = False
             st.session_state.result = None
             st.rerun()
@@ -128,10 +113,11 @@ else:
         if st.session_state.result is None:
             cam = st.camera_input("Ruh Halini Analiz Et")
             if cam:
-                img = Image.open(cam).convert('L') # Gri tonlama
+                img = Image.open(cam).convert('L') # Gri tonlama (Analiz için hafiflik)
                 avg_pixel = np.array(img).mean()
                 
                 with st.spinner("AI Duygularını İnceliyor..."):
+                    # Işık şiddeti tabanlı stabil "dümenden" analiz
                     if avg_pixel > 130: dom = "happy"
                     elif avg_pixel < 80: dom = "sad"
                     else: dom = "neutral"
@@ -152,10 +138,9 @@ else:
             with c1:
                 st.header(f"Ruh Halin: {TRANSLATION.get(r['dom']).upper()} ✨")
                 for k, v in r['norm'].items():
-                    if v > 1:
-                        st.write(f"**{TRANSLATION.get(k, k)}**")
-                        st.progress(int(v))
-                if st.button("🔄 Yeni Analiz Yap"):
+                    st.write(f"**{TRANSLATION.get(k, k)}**")
+                    st.progress(int(v))
+                if st.button("🔄 Tekrar Dene"):
                     st.session_state.result = None
                     st.rerun()
             with c2:
@@ -183,5 +168,5 @@ else:
                             st.divider()
                             for m, v in dat['details'].items():
                                 if v > 1: st.write(f"{m}: %{int(v)}")
-        except Exception as e:
-            st.error(f"Kayıtlar listelenirken bir sorun oluştu: {e}")
+        except:
+            st.error("Kayıtlar listelenirken bir sorun oluştu.")
