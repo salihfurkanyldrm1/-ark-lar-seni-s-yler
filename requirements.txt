@@ -1,8 +1,8 @@
-streamlit
-deepface
-opencv-python-headless
-tf-keras
+streamlit==1.33.0
+deepface==0.0.79
+tensorflow-cpu==2.12.0
+opencv-python-headless==4.8.1.78
 firebase-admin
 pillow
 requests
-numpy==1.26.4
+numpy==1.23.5
