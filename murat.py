@@ -1,64 +1,50 @@
 import streamlit as st
-from PIL import Image
-import numpy as np
-import random
 import requests
+import random
 import firebase_admin
 from firebase_admin import credentials, firestore
-import os
+import time
 import io
 
-# --- 1. FIREBASE VE CLOUD AI AYARLARI (ID'SİZ SADECE SECRETS) ---
-# Hugging Face Beyni
+# --- 1. AYARLAR VE BULUT BAĞLANTISI ---
 HF_TOKEN = st.secrets["hf_token"]
+# Duyguları daha net yakalayan güncel model
 API_URL = "https://api-inference.huggingface.co/models/michel-schellekens/facial-emotion-recognition"
 headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-# Firebase Bağlantısı (Tüm bilgileri Secrets TOML'dan çekiyor)
+# Firebase: Tüm ID'ler Secrets'tan çekiliyor
 if not firebase_admin._apps:
     try:
-        # Secrets'tan gelen sözlüğü al ve private_key'i düzelt
-        fb_dict = dict(st.secrets["firebase"])
-        fb_dict["private_key"] = fb_dict["private_key"].replace("\\n", "\n")
-        
-        cred = credentials.Certificate(fb_dict)
+        fb_config = dict(st.secrets["firebase"])
+        fb_config["private_key"] = fb_config["private_key"].replace("\\n", "\n")
+        cred = credentials.Certificate(fb_config)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        st.error(f"⚠️ Bulut Bağlantı Hatası: {e}")
+        st.error(f"Bağlantı Hatası: {e}")
 
 db = firestore.client()
 
-# --- 2. YARDIMCI SÖZLÜKLER VE FONKSİYONLAR ---
-TRANSLATION = {
-    "happy": "Mutlu", "sad": "Üzgün", "neutral": "Tarafsız",
-    "angry": "Sinirli", "surprise": "Şaşkın", "fear": "Korku", "disgust": "Tiksinti"
-}
-
+# --- 2. FONKSİYONLAR ---
 def query_hf_api(image_bytes):
-    response = requests.post(API_URL, headers=headers, data=image_bytes)
-    return response.json()
+    """Bulut sunucusu uyanana kadar deneme yapan fonksiyon"""
+    for _ in range(3): # 3 kez deneme yapar
+        response = requests.post(API_URL, headers=headers, data=image_bytes)
+        res = response.json()
+        if isinstance(res, dict) and "estimated_time" in res:
+            time.sleep(5) # Sunucu uyanırken 5 saniye bekle
+            continue
+        return res
+    return None
 
 def user_auth(u, p, mode):
     user_ref = db.collection('users').document(u)
     doc = user_ref.get()
     if mode == "Giriş":
-        if doc.exists and doc.to_dict().get('password') == p: return True
-        return False
+        return doc.exists and doc.to_dict().get('password') == p
     else:
         if doc.exists: return False
         user_ref.set({'username': u, 'password': p})
         return True
-
-def save_analysis(u, dom, song, score):
-    try:
-        db.collection('mood_history').add({
-            'username': u,
-            'emotion': TRANSLATION.get(dom, dom).upper(),
-            'song': song,
-            'ai_score': int(score),
-            'timestamp': firestore.SERVER_TIMESTAMP
-        })
-    except: pass
 
 def get_yt_content(p_id, a_key):
     url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=50&playlistId={p_id}&key={a_key}"
@@ -69,81 +55,65 @@ def get_yt_content(p_id, a_key):
         return {"title": item['title'], "v_id": v_id, "thumb": f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"}
     except: return None
 
-# --- 3. TASARIM ---
-st.set_page_config(page_title="Mood-Fi: Cloud AI", page_icon="🎵", layout="wide")
+# --- 3. ARAYÜZ ---
+st.set_page_config(page_title="Mood-Fi: Cloud AI", layout="wide")
+TRANSLATION = {"happy": "Mutlu", "sad": "Üzgün", "neutral": "Tarafsız"}
+
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
 
 if not st.session_state.auth:
-    st.title("🎵 Mood-Fi: Cloud AI & Music")
+    st.title("🎵 Mood-Fi: Cloud AI")
     st.info("Bursa Teknik Üniversitesi - Bulut Bilişim Sunumu")
-    t1, t2 = st.tabs(["🔐 Giriş", "📝 Kaydol"])
+    t1, t2 = st.tabs(["Giriş", "Kaydol"])
     with t1:
         with st.form("l"):
-            u = st.text_input("Kullanıcı")
-            p = st.text_input("Şifre", type="password")
+            u, p = st.text_input("Kullanıcı"), st.text_input("Şifre", type="password")
             if st.form_submit_button("Giriş"):
-                if user_auth(u, p, "Giriş"): 
-                    st.session_state.auth = True; st.session_state.user = u; st.rerun()
-                else: st.error("Hatalı Giriş!")
+                if user_auth(u, p, "Giriş"): st.session_state.auth, st.session_state.user = True, u; st.rerun()
+                else: st.error("Hatalı!")
     with t2:
         with st.form("r"):
-            ru = st.text_input("Yeni Kullanıcı")
-            rp = st.text_input("Yeni Şifre", type="password")
+            ru, rp = st.text_input("Yeni Kullanıcı"), st.text_input("Yeni Şifre", type="password")
             if st.form_submit_button("Kaydol"):
-                if user_auth(ru, rp, "Kaydol"): st.success("Hesap Oluşturuldu!")
-                else: st.error("Kullanıcı Mevcut!")
+                if user_auth(ru, rp, "Kaydol"): st.success("Başarılı!")
+                else: st.error("Mevcut!")
 else:
     with st.sidebar:
-        st.subheader(f"👤 {st.session_state.user}")
-        if st.button("🚪 Çıkış"): st.session_state.auth = False; st.rerun()
+        st.write(f"👤 {st.session_state.user}")
+        if st.button("Çıkış"): st.session_state.auth = False; st.rerun()
 
-    tab_anlz, tab_hist = st.tabs(["🔍 Cloud Analizi", "📂 Geçmişim"])
+    tab_anlz, tab_hist = st.tabs(["🔍 Analiz", "📂 Geçmiş"])
     
-    Y_KEY = st.secrets["youtube_api_key"]
-    # Playlistler de Secrets'tan geliyor
-    PLAYS = {
-        "happy": st.secrets["playlist_happy"], 
-        "sad": st.secrets["playlist_sad"], 
-        "neutral": st.secrets["playlist_neutral"]
-    }
-
     with tab_anlz:
-        cam = st.camera_input("Fotoğraf Çek ve Analiz Et")
+        cam = st.camera_input("Analiz Et")
         if cam:
-            i_bytes = cam.getvalue()
-            with st.spinner("Bulut AI Duygularını İnceliyor..."):
-                try:
-                    res = query_hf_api(i_bytes)
-                    if res and isinstance(res, list):
-                        top_res = res[0]
-                        dom = top_res['label'].lower()
-                        scr = top_res['score'] * 100
-                        
-                        if dom in ["joy", "happy", "smile"]: mood_key = "happy"
-                        elif dom in ["sad", "disappointed"]: mood_key = "sad"
-                        else: mood_key = "neutral"
-
-                        yt = get_yt_content(PLAYS.get(mood_key, PLAYS["neutral"]), Y_KEY)
-                        if yt:
-                            save_analysis(st.session_state.user, mood_key, yt['title'], scr)
-                            c1, c2 = st.columns(2)
-                            with c1:
-                                st.header(f"Mood: {TRANSLATION.get(mood_key, 'Tarafsız').upper()} ✨")
-                                st.metric("AI Güven Skoru", f"%{int(scr)}")
-                                if st.button("🔄 Yenile"): st.rerun()
-                            with c2:
-                                st.subheader(f"🎵 Öneri: {yt['title']}")
-                                st.image(yt['thumb'])
-                                st.link_button("▶️ YouTube'da Dinle", f"https://music.youtube.com/watch?v={yt['v_id']}")
-                except:
-                    st.warning("Bulut sunucusu meşgul, lütfen tekrar deneyin.")
+            with st.spinner("Bulut AI Sunucusu Uyandırılıyor..."):
+                res = query_hf_api(cam.getvalue())
+                if res and isinstance(res, list):
+                    dom = res[0]['label'].lower()
+                    scr = res[0]['score'] * 100
+                    mood = "happy" if dom in ["joy", "happy"] else "sad" if dom in ["sad"] else "neutral"
+                    
+                    yt = get_yt_content(st.secrets[f"playlist_{mood}"], st.secrets["youtube_api_key"])
+                    if yt:
+                        db.collection('mood_history').add({
+                            'username': st.session_state.user, 'emotion': TRANSLATION[mood].upper(),
+                            'song': yt['title'], 'ai_score': int(scr), 'timestamp': firestore.SERVER_TIMESTAMP
+                        })
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.header(f"Mood: {TRANSLATION[mood].upper()}")
+                            st.metric("AI Güveni", f"%{int(scr)}")
+                        with c2:
+                            st.subheader(f"Öneri: {yt['title']}")
+                            st.image(yt['thumb'])
+                            st.link_button("YouTube'da Dinle", f"https://music.youtube.com/watch?v={yt['v_id']}")
+                else: st.warning("Bulut sunucusu şu an hazır değil, lütfen 5 saniye sonra tekrar deneyin.")
 
     with tab_hist:
         docs = db.collection('mood_history').where('username', '==', st.session_state.user).stream()
         h_list = sorted([d.to_dict() for d in docs], key=lambda x: x.get('timestamp', 0), reverse=True)
-        for dat in h_list[:10]:
-            ts = dat.get('timestamp')
-            t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni"
-            with st.expander(f"📅 {t_str} | {dat.get('emotion')}"):
-                st.write(f"Şarkı: {dat.get('song')} (Skor: %{dat.get('ai_score', 0)})")
+        for d in h_list[:10]:
+            ts = d.get('timestamp').strftime("%d/%m %H:%M") if d.get('timestamp') else "Yeni"
+            st.write(f"📅 {ts} | {d.get('emotion')} - {d.get('song')} (%{d.get('ai_score')})")
