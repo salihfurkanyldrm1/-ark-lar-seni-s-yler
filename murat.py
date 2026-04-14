@@ -7,27 +7,44 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 
-# --- 1. FIREBASE BAĞLANTISI (GÜÇLENDİRİLMİŞ) ---
+# --- 1. FIREBASE BAĞLANTISI (GÜÇLENDİRİLMİŞ & GLOBAL) ---
+# Global bir db değişkeni oluşturuyoruz
+db = None
+
 def init_firebase():
+    global db
     try:
-        # Eğer uygulama zaten initialize edildiyse mevcut olanı döndür
-        return firebase_admin.get_app()
-    except ValueError:
-        # Eğer initialize edilmediyse yeni baştan başlat
+        # Önce mevcut uygulamayı kontrol et
         try:
+            app = firebase_admin.get_app()
+        except ValueError:
+            # Uygulama yoksa secrets veya json ile başlat
             if "firebase" in st.secrets:
                 fb_info = dict(st.secrets["firebase"])
                 fb_info["private_key"] = fb_info["private_key"].replace("\\n", "\n")
                 cred = credentials.Certificate(fb_info)
-                return firebase_admin.initialize_app(cred)
+                app = firebase_admin.initialize_app(cred)
             else:
                 JSON_FILE = "sarkilarbizisoyler-b5128-firebase-adminsdk-fbsvc-53af40b6a8.json"
                 if os.path.exists(JSON_FILE):
                     cred = credentials.Certificate(JSON_FILE)
-                    return firebase_admin.initialize_app(cred)
-        except Exception as e:
-            st.error(f"Firebase Başlatma Hatası: {e}")
-            return None
+                    app = firebase_admin.initialize_app(cred)
+                else:
+                    return None
+        
+        # db'yi global olarak tanımla
+        db = firestore.client()
+        return app
+    except Exception as e:
+        st.error(f"Bağlantı Hatası: {e}")
+        return None
+
+# Uygulamayı başlat
+init_firebase()
+
+# Eğer db hala tanımlanmadıysa (hata durumu) boş bir uyarı ver
+if db is None:
+    st.error("Veritabanı bağlantısı kurulamadı! Lütfen Secrets ayarlarını kontrol edin.")
 
 # Uygulamayı başlat
 app = init_firebase()
