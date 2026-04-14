@@ -5,4 +5,4 @@ tf-keras
 firebase-admin
 pillow
 requests
-numpy
+numpy==1.26.4
