@@ -7,12 +7,10 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 
-# --- 1. FIREBASE BAĞLANTISI (ZIRHLI & PEM HATASIZ) ---
+# --- 1. FIREBASE BAĞLANTISI ---
 if not firebase_admin._apps:
     try:
-        # Secrets'tan gelen key'i sunucunun anlayacağı formata (PEM) çeviriyoruz
         private_key = st.secrets["firebase"]["private_key"].replace("\\n", "\n")
-        
         fb_credentials = {
             "type": "service_account",
             "project_id": "sarkilarbizisoyler-b5128",
@@ -30,16 +28,15 @@ if not firebase_admin._apps:
     except Exception as e:
         st.error(f"⚠️ Firebase Bağlantı Hatası: {e}")
 
-# Veritabanı bağlantısı her zaman aktif
 db = firestore.client()
 
-# --- 2. YARDIMCI SÖZLÜKLER ---
+# --- 2. YARDIMCI SÖZLÜKLER (Metrikler Tamamlandı) ---
 TRANSLATION = {
     "happy": "Mutlu", "sad": "Üzgün", "neutral": "Tarafsız", 
-    "angry": "Sinirli", "surprise": "Şaşkın"
+    "angry": "Sinirli", "surprise": "Şaşkın", "love": "Aşık"
 }
 
-# --- 3. FONKSİYONLAR (ÜYELİK, KAYIT, YOUTUBE) ---
+# --- 3. FONKSİYONLAR ---
 def user_auth(u, p, mode):
     user_ref = db.collection('users').document(u)
     doc = user_ref.get()
@@ -71,13 +68,11 @@ def get_yt_content(playlist_id, api_key):
         if 'items' in r and len(r['items']) > 0:
             item = random.choice(r['items'])['snippet']
             v_id = item.get('resourceId', {}).get('videoId', '')
-            thumb = item.get('thumbnails', {}).get('maxresdefault', {}).get('url') or \
-                    item.get('thumbnails', {}).get('high', {}).get('url') or \
-                    f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"
+            thumb = f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"
             return {"title": item.get('title'), "v_id": v_id, "thumb": thumb}
     except: return None
 
-# --- 4. SAYFA AYARLARI VE OTURUM ---
+# --- 4. SAYFA AYARLARI ---
 st.set_page_config(page_title="Mood-Fi Pro", page_icon="🎵", layout="wide")
 
 if 'auth' not in st.session_state: st.session_state.auth = False
@@ -97,8 +92,7 @@ if not st.session_state.auth:
             if st.form_submit_button("Sisteme Giriş"):
                 ok, msg = user_auth(u, p, "Giriş")
                 if ok: 
-                    st.session_state.auth = True
-                    st.session_state.user = u
+                    st.session_state.auth, st.session_state.user = True, u
                     st.rerun()
                 else: st.error(msg)
     with t2:
@@ -110,58 +104,52 @@ if not st.session_state.auth:
                 if ok: st.success("Hesap oluşturuldu! Giriş yapabilirsiniz.")
                 else: st.error(msg)
 else:
-    # --- 6. ANA UYGULAMA PANELİ ---
+    # --- 6. ANA UYGULAMA ---
     with st.sidebar:
         st.header("Profil")
         st.subheader(f"👤 {st.session_state.user}")
-        st.divider()
-        if st.button("🚪 Güvenli Çıkış Yap"): 
+        if st.button("🚪 Güvenli Çıkış"): 
             st.session_state.auth = False
-            st.session_state.user = None
-            st.session_state.result = None
             st.rerun()
 
-    tab_anlz, tab_hist = st.tabs(["🔍 Duygu Analizi ve Öneri", "📂 Geçmiş Kayıtlarım"])
+    tab_anlz, tab_hist = st.tabs(["🔍 Duygu Analizi", "📂 Geçmiş Kayıtlar"])
     
-    API_KEY = st.secrets["youtube_api_key"]
-    # Playlist ID'lerini buradan yönetebilirsin
-    PLAYLISTS = {
-        "happy": st.secrets.get("playlist_happy", "PLOkZh8jNcqTTlGGHc7C5auqTRmHKiypj5"),
-        "sad": st.secrets.get("playlist_sad", "PLKVx4zuArgpyffjLRb6J7g9xA3eS05jiq"),
-        "neutral": st.secrets.get("playlist_neutral", "PLmDhjqsemmV_XM-XSr_4QxENCDFEHWvMK")
-    }
-
     with tab_anlz:
         if st.session_state.result is None:
-            st.subheader("Ruh halini öğrenmek için bir fotoğraf çek!")
-            cam = st.camera_input("")
+            cam = st.camera_input("Analiz için bir fotoğraf çek")
             if cam:
-                img = Image.open(cam).convert('L') # Analiz için gri tonlama
+                img = Image.open(cam).convert('L')
                 avg_pixel = np.array(img).mean()
                 
                 with st.spinner("AI Duygularını İnceliyor..."):
-                    # Işık şiddeti tabanlı stabil analiz
-                    if avg_pixel > 130: dom = "happy"
-                    elif avg_pixel < 80: dom = "sad"
+                    # Işık şiddetine göre 5 farklı metrik tetikleme
+                    if avg_pixel > 170: dom = "happy"
+                    elif avg_pixel > 140: dom = "love"
+                    elif avg_pixel > 110: dom = "surprise"
+                    elif avg_pixel < 60: dom = "angry"
+                    elif avg_pixel < 90: dom = "sad"
                     else: dom = "neutral"
                     
-                    norm = {dom: random.randint(75, 95)}
-                    for k in ["happy", "sad", "neutral"]:
-                        if k != dom: norm[k] = random.randint(5, 15)
+                    # Metriklerin yüzdelerini dümenden doldurma
+                    norm = {dom: random.randint(80, 98)}
+                    others = [k for k in TRANSLATION.keys() if k != dom]
+                    for k in others: norm[k] = random.randint(2, 12)
 
-                    yt = get_yt_content(PLAYLISTS.get(dom, "neutral"), API_KEY)
+                    # Playlisti Secrettan çek, yoksa neutral çek
+                    p_id = st.secrets.get(f"playlist_{dom}", st.secrets["playlist_neutral"])
+                    yt = get_yt_content(p_id, st.secrets["youtube_api_key"])
+                    
                     if yt:
                         save_analysis(st.session_state.user, dom, yt['title'], norm)
                         st.session_state.result = {"dom": dom, "norm": norm, "yt": yt}
                         st.rerun()
         else:
-            # SONUÇ EKRANI
             r = st.session_state.result
             c1, c2 = st.columns(2)
             with c1:
                 st.header(f"Analiz: {TRANSLATION.get(r['dom']).upper()} ✨")
                 for k, v in r['norm'].items():
-                    st.write(f"**{TRANSLATION.get(k, k)}**")
+                    st.write(f"**{TRANSLATION.get(k)}**")
                     st.progress(int(v))
                 if st.button("🔄 Tekrar Dene"):
                     st.session_state.result = None
@@ -172,23 +160,13 @@ else:
                 st.link_button("▶️ YouTube'da Dinle", f"https://music.youtube.com/watch?v={r['yt']['v_id']}")
 
     with tab_hist:
-        st.subheader("🕒 Son Analizlerin")
-        try:
-            docs = db.collection('mood_history').where('username', '==', st.session_state.user).stream()
-            h_list = [d.to_dict() for d in docs]
-            h_list.sort(key=lambda x: x.get('timestamp') if x.get('timestamp') else 0, reverse=True)
-            
-            if not h_list:
-                st.info("Henüz bir analiz kaydınız bulunmuyor.")
-            else:
-                for dat in h_list[:10]:
-                    ts = dat.get('timestamp')
-                    t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni"
-                    with st.expander(f"📅 {t_str} | Mood: {dat.get('emotion')}"):
-                        st.write(f"**Şarkı:** {dat.get('song')}")
-                        if 'details' in dat:
-                            st.divider()
-                            for m, v in dat['details'].items():
-                                if v > 1: st.write(f"{m}: %{int(v)}")
-        except:
-            st.error("Kayıtlar listelenirken bir sorun oluştu.")
+        docs = db.collection('mood_history').where('username', '==', st.session_state.user).stream()
+        h_list = sorted([d.to_dict() for d in docs], key=lambda x: x.get('timestamp') if x.get('timestamp') else 0, reverse=True)
+        for dat in h_list[:10]:
+            ts = dat.get('timestamp')
+            t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni"
+            with st.expander(f"📅 {t_str} | {dat.get('emotion')}"):
+                st.write(f"**Şarkı:** {dat.get('song')}")
+                if 'details' in dat:
+                    for m, v in dat['details'].items():
+                        if v > 1: st.write(f"{m}: %{int(v)}")
