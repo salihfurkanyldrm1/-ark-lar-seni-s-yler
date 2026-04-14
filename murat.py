@@ -7,22 +7,36 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import os
 
-# --- 1. FIREBASE BAĞLANTISI ---
-if not firebase_admin._apps:
+# --- 1. FIREBASE BAĞLANTISI (GÜÇLENDİRİLMİŞ) ---
+def init_firebase():
     try:
-        if "firebase" in st.secrets:
-            fb_info = dict(st.secrets["firebase"])
-            fb_info["private_key"] = fb_info["private_key"].replace("\\n", "\n")
-            cred = credentials.Certificate(fb_info)
-            firebase_admin.initialize_app(cred)
-        else:
-            JSON_FILE = "sarkilarbizisoyler-b5128-firebase-adminsdk-fbsvc-53af40b6a8.json"
-            if os.path.exists(JSON_FILE):
-                cred = credentials.Certificate(JSON_FILE)
-                firebase_admin.initialize_app(cred)
-    except: pass
-db = firestore.client()
+        # Eğer uygulama zaten initialize edildiyse mevcut olanı döndür
+        return firebase_admin.get_app()
+    except ValueError:
+        # Eğer initialize edilmediyse yeni baştan başlat
+        try:
+            if "firebase" in st.secrets:
+                fb_info = dict(st.secrets["firebase"])
+                fb_info["private_key"] = fb_info["private_key"].replace("\\n", "\n")
+                cred = credentials.Certificate(fb_info)
+                return firebase_admin.initialize_app(cred)
+            else:
+                JSON_FILE = "sarkilarbizisoyler-b5128-firebase-adminsdk-fbsvc-53af40b6a8.json"
+                if os.path.exists(JSON_FILE):
+                    cred = credentials.Certificate(JSON_FILE)
+                    return firebase_admin.initialize_app(cred)
+        except Exception as e:
+            st.error(f"Firebase Başlatma Hatası: {e}")
+            return None
 
+# Uygulamayı başlat
+app = init_firebase()
+
+# Firestore istemcisini ancak uygulama hazırsa bağla
+if app:
+    db = firestore.client()
+else:
+    st.error("Veritabanı bağlantısı kurulamadı!")
 # --- 2. YARDIMCI SÖZLÜKLER VE FONKSİYONLAR ---
 TRANSLATION = {
     "happy": "Mutlu", "sad": "Üzgün", "neutral": "Tarafsız", 
