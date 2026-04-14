@@ -175,17 +175,28 @@ else:
     with tab_hist:
         st.subheader("🕒 Son Analizlerin")
         try:
-            # Firebase Geçmişi (Tarih Sıralı)
-            docs = db.collection('mood_history').where('username', '==', st.session_state.user).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(10).stream()
+            # Önce kullanıcının tüm verilerini çekiyoruz (Index istemez)
+            docs = db.collection('mood_history').where('username', '==', st.session_state.user).stream()
+            
+            # Verileri listeye alıp Python içinde tarihe göre sıralıyoruz
+            history_list = []
             for d in docs:
-                dat = d.to_dict()
-                ts = dat.get('timestamp')
-                t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni Analiz"
-                with st.expander(f"📅 {t_str} | Mood: {dat.get('emotion')}"):
-                    st.write(f"**Önerilen Şarkı:** {dat.get('song')}")
-                    if 'details' in dat:
-                        st.divider()
-                        for m, v in dat['details'].items():
-                            if v > 1: st.write(f"{m}: %{int(v)}")
-        except Exception:
-            st.info("Kayıtlar yüklenirken bir hata oluştu veya henüz analiz yapmadınız.")
+                history_list.append(d.to_dict())
+            
+            # Tarihe göre tersten sırala (En yeni en üstte)
+            history_list.sort(key=lambda x: x.get('timestamp') if x.get('timestamp') else 0, reverse=True)
+
+            if not history_list:
+                st.info("Henüz analiz yapmadınız.")
+            else:
+                for dat in history_list[:10]: # Son 10 kayıt
+                    ts = dat.get('timestamp')
+                    t_str = ts.strftime("%d/%m %H:%M") if ts else "Yeni Analiz"
+                    with st.expander(f"📅 {t_str} | Mood: {dat.get('emotion')}"):
+                        st.write(f"**Önerilen Şarkı:** {dat.get('song')}")
+                        if 'details' in dat:
+                            st.divider()
+                            for m, v in dat['details'].items():
+                                if v > 1: st.write(f"{m}: %{int(v)}")
+        except Exception as e:
+            st.error(f"Kayıtlar çekilirken bir hata oluştu: {e}")
